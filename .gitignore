@@ -1,0 +1,10 @@
+# Ignore target folder
+/target/
+
+# Ignore build artifacts and logs
+**/*.rs.bk
+**/*.log
+
+# Ignore IDE/editor-specific files
+.idea/
+.vscode/
