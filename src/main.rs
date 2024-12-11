@@ -1,5 +1,7 @@
-
 use ncurses::*;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::{env, process};
 
 const REGULAR_PAIR: i16 = 0;
 const HIGHLIGHT_PAIR: i16 = 1;
@@ -55,17 +57,28 @@ impl Ui {
     fn end(&mut self) {}
 }
 
-enum Tabs {
+#[derive(Debug)]
+enum Status {
     Todo,
     Done,
 }
 
-impl Tabs {
+impl Status {
     fn toggle(&self) -> Self {
         match self {
-            Tabs::Todo => Tabs::Done,
-            Tabs::Done => Tabs::Todo,
+            Status::Todo => Status::Done,
+            Status::Done => Status::Todo,
         }
+    }
+}
+
+fn parse_item(line: &str) -> Option<(Status, &str)> {
+    if line.starts_with("TODO: ") {
+        return Some((Status::Todo, &line[6..].trim()));
+    } else if line.starts_with("DONE: ") {
+        return Some((Status::Done, &line[6..].trim()));
+    } else {
+        return None;
     }
 }
 
@@ -81,7 +94,11 @@ fn list_down(list: &Vec<String>, list_curr: &mut usize) {
     }
 }
 
-fn list_transfer (list_dst: &mut Vec<String>, list_src: &mut Vec<String>, list_src_curr: &mut usize) {
+fn list_transfer(
+    list_dst: &mut Vec<String>,
+    list_src: &mut Vec<String>,
+    list_src_curr: &mut usize,
+) {
     if *list_src_curr < list_src.len() {
         list_dst.push(list_src.remove(*list_src_curr));
         if *list_src_curr >= list_src.len() {
@@ -90,7 +107,58 @@ fn list_transfer (list_dst: &mut Vec<String>, list_src: &mut Vec<String>, list_s
     }
 }
 
+fn load_state (todos: &mut Vec<String>, done: &mut Vec<String>, file_path: &str){
+        let file = File::open(file_path).unwrap();
+        for (index, line) in BufReader::new(file).lines().enumerate() {
+            match parse_item(&line.unwrap()) {
+                Some((Status::Todo, item)) => todos.push(item.to_string()),
+                Some((Status::Done, item)) => done.push(item.to_string()),
+                None => {
+                    eprintln!("{}:{} - ERROR: Illegal line format", file_path, index + 1,);
+
+                    process::exit(1);
+                }
+            }
+        }
+    }
+
+fn save_state(todos: &Vec<String>, done: &Vec<String>, file_path: &str) {
+    let mut file = File::create(file_path).unwrap();
+    for todo in todos.iter() {
+        let _ = writeln!(file, "TODO: {}", todo).unwrap();
+    }
+
+    for done in done.iter() {
+        let _ = writeln!(file, "DONE: {}", done).unwrap();
+    }
+}
+
 fn main() {
+    let mut args = env::args();
+    args.next().unwrap();
+
+    let file_path = {
+        match args.next() {
+            Some(file_path) => file_path,
+            None => {
+                eprintln!("Usage: todo <file>");
+                eprintln!("ERROR: Missing file path");
+                process::exit(1);
+            }
+        }
+    };
+
+
+
+    let mut todos = Vec::<String>::new();
+    let mut done = Vec::<String>::new();
+    let mut todo_curr: usize = 0;
+    let mut done_curr: usize = 0;
+
+    load_state(&mut todos, &mut done, &file_path);
+
+    
+
     initscr();
     noecho();
     curs_set(CURSOR_VISIBILITY::CURSOR_INVISIBLE);
@@ -100,28 +168,16 @@ fn main() {
     init_pair(HIGHLIGHT_PAIR, COLOR_BLACK, COLOR_WHITE);
 
     let mut quit = false;
-    let mut todos: Vec<String> = vec![
-        "Write a todo app".to_string(),
-        "Learn Rust".to_string(),
-        "Invent a time machine".to_string(),
-    ];
-    let mut done: Vec<String> = vec![
-        "Listen to music".to_string(),
-        "Hey this is done".to_string(),
-    ];
 
-    let mut todo_curr: usize = 0;
-    let mut done_curr: usize = 0;
-
-    let mut tabs = Tabs::Todo;
+    let mut status = Status::Todo;
 
     let mut ui = Ui::default();
     while !quit {
         erase();
         ui.begin(0, 0);
         {
-            match tabs {
-                Tabs::Todo => {
+            match status {
+                Status::Todo => {
                     ui.label("[TODO] DONE ", REGULAR_PAIR);
                     ui.label("------------", REGULAR_PAIR);
                     ui.begin_list(todo_curr);
@@ -134,7 +190,7 @@ fn main() {
                     ui.end_list();
                 }
 
-                Tabs::Done => {
+                Status::Done => {
                     ui.label(" TODO [DONE]", REGULAR_PAIR);
                     ui.label("------------", REGULAR_PAIR);
                     ui.begin_list(done_curr);
@@ -152,29 +208,30 @@ fn main() {
         let key = getch();
         match key as u8 as char {
             'q' => quit = true,
-            'w' => match tabs {
-                Tabs::Todo => list_up(&todos, &mut todo_curr),
-                Tabs::Done => list_up(&done, &mut done_curr),
+
+            'w' => match status {
+                Status::Todo => list_up(&todos, &mut todo_curr),
+                Status::Done => list_up(&done, &mut done_curr),
             },
-            's' => match tabs {
-                Tabs::Todo => list_down(&todos, &mut todo_curr),
-                Tabs::Done => list_down(&done, &mut done_curr),
+            's' => match status {
+                Status::Todo => list_down(&todos, &mut todo_curr),
+                Status::Done => list_down(&done, &mut done_curr),
             },
 
             '\t' => {
-                tabs = tabs.toggle();
+                status = status.toggle();
             }
 
-            '\n' => match tabs {
-                Tabs::Todo => list_transfer(&mut done, &mut todos, &mut todo_curr),
+            '\n' => match status {
+                Status::Todo => list_transfer(&mut done, &mut todos, &mut todo_curr),
 
-                Tabs::Done => list_transfer(&mut todos, &mut done, &mut done_curr),
+                Status::Done => list_transfer(&mut todos, &mut done, &mut done_curr),
             },
 
             _ => {}
-
-            }
+        }
     }
 
+    save_state(&todos, &done, &file_path);
     endwin();
 }
